@@ -1,6 +1,27 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Standard permissions -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.READ_CALL_LOG" />
+    <uses-permission android:name="android.permission.WRITE_CALL_LOG" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
+    
+    <!-- Telecom framework permissions for default dialer -->
+    <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+    <uses-permission android:name="android.permission.BIND_TELECOM_CONNECTION_SERVICE" 
+        android:protectionLevel="signature|privileged" />
+    
+    <!-- Required for showing UI when app is killed -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
       android:name=".MainApplication"
@@ -17,11 +38,78 @@
         android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
         android:launchMode="singleTask"
         android:windowSoftInputMode="adjustResize"
+        android:showWhenLocked="true"
+        android:turnScreenOn="true"
         android:exported="true">
         <intent-filter>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent-filter>
+        <!-- Default dialer intent filters -->
+        <intent-filter>
+            <action android:name="android.intent.action.DIAL" />
+            <category android:name="android.intent.category.DEFAULT" />
+        </intent-filter>
+        <intent-filter>
+            <action android:name="android.intent.action.DIAL" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <data android:scheme="tel" />
+        </intent-filter>
+        <intent-filter>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="tel" />
+        </intent-filter>
+        <!-- Incoming call intent -->
+        <intent-filter>
+            <action android:name="com.albez0dialer.INCOMING_CALL" />
+            <category android:name="android.intent.category.DEFAULT" />
+        </intent-filter>
       </activity>
+
+      <!-- ConnectionService - Handles outgoing and incoming call connections -->
+      <service
+          android:name=".telecom.MyConnectionService"
+          android:permission="android.permission.BIND_TELECOM_CONNECTION_SERVICE"
+          android:exported="true">
+          <intent-filter>
+              <action android:name="android.telecom.ConnectionService" />
+          </intent-filter>
+      </service>
+
+      <!-- InCallService - Manages active calls and call state -->
+      <service
+          android:name=".telecom.MyInCallService"
+          android:permission="android.permission.BIND_INCALL_SERVICE"
+          android:exported="true">
+          <intent-filter>
+              <action android:name="android.telecom.InCallService" />
+          </intent-filter>
+          <meta-data
+              android:name="android.telecom.IN_CALL_SERVICE_UI"
+              android:value="true" />
+      </service>
+
+      <!-- BroadcastReceiver for notification actions (decline call from notification) -->
+      <receiver
+          android:name=".telecom.CallActionReceiver"
+          android:exported="false">
+          <intent-filter>
+              <action android:name="com.albez0dialer.DECLINE_CALL" />
+              <action android:name="com.albez0dialer.END_CALL" />
+          </intent-filter>
+      </receiver>
+
+      <!-- Answer call intent -->
+      <activity-alias
+          android:name=".AnswerCallActivity"
+          android:targetActivity=".MainActivity"
+          android:exported="true">
+          <intent-filter>
+              <action android:name="com.albez0dialer.ANSWER_CALL" />
+              <category android:name="android.intent.category.DEFAULT" />
+          </intent-filter>
+      </activity-alias>
     </application>
 </manifest>
