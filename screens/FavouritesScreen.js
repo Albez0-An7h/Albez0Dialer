@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import Contacts from 'react-native-contacts';
 import { getFavourites, addFavourite, removeFavourite } from '../utils/storage';
+import SimSelector from '../components/SimSelector';
 
 const { DialerModule } = NativeModules;
 const ME_SIZE = 68;
@@ -30,6 +31,8 @@ const FavouritesScreen = ({ onCall }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [favouriteIds, setFavouriteIds] = useState(new Set());
   const [graphSize, setGraphSize] = useState({ w: Dimensions.get('window').width, h: 400 });
+  const [showSimSelector, setShowSimSelector] = useState(false);
+  const [pendingCall, setPendingCall] = useState({ contact: null });
 
   useEffect(() => { loadFavourites(); }, []);
 
@@ -121,6 +124,40 @@ const FavouritesScreen = ({ onCall }) => {
     }
   };
 
+  const handleLongPressCallWithSim = (contact) => {
+    const phoneNumber = contact.phoneNumbers?.[0]?.number;
+    if (!phoneNumber) { Alert.alert('No Number', 'This contact has no phone number'); return; }
+    Vibration.vibrate(50);
+    setPendingCall({ contact });
+    setShowSimSelector(true);
+  };
+
+  const handleCallWithSim = async (sim) => {
+    const { contact } = pendingCall;
+    const phoneNumber = contact?.phoneNumbers?.[0]?.number;
+    if (!phoneNumber) return;
+    try {
+      if (Platform.OS === 'android') {
+        const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.CALL_PHONE);
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) return;
+      }
+      Vibration.vibrate(100);
+      if (DialerModule && DialerModule.startOutgoingCallWithSim) {
+        await DialerModule.startOutgoingCallWithSim(phoneNumber, sim.subscriptionId);
+        if (onCall) {
+          onCall({
+            contactName: contact?.displayName || 'Unknown',
+            phoneNumber,
+            callState: 'outgoing',
+            profilePicture: contact?.hasThumbnail && contact?.thumbnailPath ? contact.thumbnailPath : null,
+          });
+        }
+      }
+    } catch (error) {
+      Alert.alert('Call Failed', error.message);
+    }
+  };
+
   const getInitials = (name) => {
     if (!name) return '?';
     return name.split(' ').map((w) => w[0]).join('').toUpperCase().slice(0, 2);
@@ -197,8 +234,8 @@ const FavouritesScreen = ({ onCall }) => {
         }}
         activeOpacity={0.6}
         onPress={() => handleCallContact(contact)}
-        onLongPress={() => handleRemoveFavourite(contact)}
-        delayLongPress={500}
+        onLongPress={() => handleLongPressCallWithSim(contact)}
+        delayLongPress={400}
       >
         {hasPhoto ? (
           <Image
@@ -433,13 +470,22 @@ const FavouritesScreen = ({ onCall }) => {
             {/* Hint at bottom */}
             <View style={{ position: 'absolute', bottom: 16, left: 0, right: 0, alignItems: 'center' }}>
               <Text style={{ color: 'rgba(255,255,255,0.12)', fontSize: 11, fontWeight: '300' }}>
-                Tap to call · Long-press to remove
+                Tap to call · Long-press for SIM · Double-tap to remove
               </Text>
             </View>
           </View>
         )}
 
         {renderAddModal()}
+
+        {/* SIM Selector Modal */}
+        <SimSelector
+          visible={showSimSelector}
+          onClose={() => setShowSimSelector(false)}
+          onSelectSim={handleCallWithSim}
+          phoneNumber={pendingCall.contact?.phoneNumbers?.[0]?.number}
+          contactName={pendingCall.contact?.displayName}
+        />
       </View>
     </>
   );
