@@ -13,6 +13,7 @@ import {
   NativeModules,
 } from 'react-native';
 import KeypadButton from '../components/KeypadButton';
+import SimSelector from '../components/SimSelector';
 
 const { width } = Dimensions.get('window');
 const { DialerModule } = NativeModules;
@@ -20,6 +21,7 @@ const { DialerModule } = NativeModules;
 const DialerScreen = ({ onRotaryPress, onCall }) => {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [isDefaultDialer, setIsDefaultDialer] = useState(false);
+  const [showSimSelector, setShowSimSelector] = useState(false);
 
   useEffect(() => {
     const checkDefaultStatus = async () => {
@@ -68,6 +70,31 @@ const DialerScreen = ({ onRotaryPress, onCall }) => {
       Vibration.vibrate(100);
       if (DialerModule) {
         await DialerModule.startOutgoingCall(phoneNumber);
+        if (onCall) {
+          onCall({ contactName: 'Unknown', phoneNumber, callState: 'outgoing' });
+        }
+      }
+    } catch (error) {
+      Alert.alert('Call Failed', error.message);
+    }
+  };
+
+  const handleLongPressCall = () => {
+    if (!phoneNumber) return;
+    Vibration.vibrate(50);
+    setShowSimSelector(true);
+  };
+
+  const handleCallWithSim = async (sim) => {
+    if (!phoneNumber) return;
+    try {
+      if (Platform.OS === 'android') {
+        const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.CALL_PHONE);
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) return;
+      }
+      Vibration.vibrate(100);
+      if (DialerModule && DialerModule.startOutgoingCallWithSim) {
+        await DialerModule.startOutgoingCallWithSim(phoneNumber, sim.subscriptionId);
         if (onCall) {
           onCall({ contactName: 'Unknown', phoneNumber, callState: 'outgoing' });
         }
@@ -212,6 +239,8 @@ const DialerScreen = ({ onRotaryPress, onCall }) => {
                   justifyContent: 'center', alignItems: 'center',
                 }}
                 onPress={handleCall}
+                onLongPress={handleLongPressCall}
+                delayLongPress={400}
                 activeOpacity={0.7}
               >
                 <Text style={{ fontSize: 28 }}>📞</Text>
@@ -232,6 +261,15 @@ const DialerScreen = ({ onRotaryPress, onCall }) => {
             </View>
           </View>
         </View>
+
+        {/* SIM Selector Modal */}
+        <SimSelector
+          visible={showSimSelector}
+          onClose={() => setShowSimSelector(false)}
+          onSelectSim={handleCallWithSim}
+          phoneNumber={phoneNumber}
+          contactName=""
+        />
       </SafeAreaView>
     </>
   );
