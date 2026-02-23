@@ -17,6 +17,7 @@ import {
 import CallLogs from 'react-native-call-log';
 import { requestCallLogPermission, requestPhoneStatePermission } from '../utils/permissions';
 import { buildContactPhotoMap, lookupContact } from '../utils/contactLookup';
+import SimSelector from '../components/SimSelector';
 
 const { DialerModule } = NativeModules;
 
@@ -26,6 +27,8 @@ const CallLogsScreen = ({ onCall }) => {
   const [loading, setLoading] = useState(true);
   const [permissionGranted, setPermissionGranted] = useState(false);
   const contactMapRef = useRef(null);
+  const [showSimSelector, setShowSimSelector] = useState(false);
+  const [pendingCall, setPendingCall] = useState({ phoneNumber: '', name: '' });
 
   useEffect(() => {
     loadCallLogs();
@@ -140,6 +143,41 @@ const CallLogsScreen = ({ onCall }) => {
       Vibration.vibrate(100);
       if (DialerModule) {
         await DialerModule.startOutgoingCall(phoneNumber);
+        const contact = lookupContact(contactMapRef.current, phoneNumber);
+        if (onCall) {
+          onCall({
+            contactName: name || 'Unknown',
+            phoneNumber,
+            callState: 'outgoing',
+            profilePicture: contact?.thumbnailPath || null,
+          });
+        }
+      }
+    } catch (error) {
+      Alert.alert('Call Failed', error.message);
+    }
+  };
+
+  const handleLongPressCall = (phoneNumber, name) => {
+    if (!phoneNumber) return;
+    Vibration.vibrate(50);
+    setPendingCall({ phoneNumber, name });
+    setShowSimSelector(true);
+  };
+
+  const handleCallWithSim = async (sim) => {
+    const { phoneNumber, name } = pendingCall;
+    if (!phoneNumber) return;
+    try {
+      if (Platform.OS === 'android') {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.CALL_PHONE,
+        );
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) return;
+      }
+      Vibration.vibrate(100);
+      if (DialerModule && DialerModule.startOutgoingCallWithSim) {
+        await DialerModule.startOutgoingCallWithSim(phoneNumber, sim.subscriptionId);
         const contact = lookupContact(contactMapRef.current, phoneNumber);
         if (onCall) {
           onCall({
@@ -273,6 +311,8 @@ const CallLogsScreen = ({ onCall }) => {
             marginLeft: 10,
           }}
           onPress={() => handleCallBack(phoneNumber, name)}
+          onLongPress={() => handleLongPressCall(phoneNumber, name)}
+          delayLongPress={400}
           activeOpacity={0.5}
         >
           <Text style={{ fontSize: 16 }}>📞</Text>
@@ -357,6 +397,15 @@ const CallLogsScreen = ({ onCall }) => {
           ListEmptyComponent={renderEmptyList}
           contentContainerStyle={{ paddingBottom: 20, paddingTop: 4 }}
           showsVerticalScrollIndicator={false}
+        />
+
+        {/* SIM Selector Modal */}
+        <SimSelector
+          visible={showSimSelector}
+          onClose={() => setShowSimSelector(false)}
+          onSelectSim={handleCallWithSim}
+          phoneNumber={pendingCall.phoneNumber}
+          contactName={pendingCall.name}
         />
       </SafeAreaView>
     </>
