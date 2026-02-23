@@ -1,17 +1,22 @@
 package com.albez0dialer
 
+import android.Manifest
 import android.app.role.RoleManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.telecom.CallAudioState
 import android.telecom.PhoneAccount
 import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
+import android.telephony.SubscriptionInfo
+import android.telephony.SubscriptionManager
 import android.util.Log
 import androidx.annotation.RequiresApi
+import androidx.core.content.ContextCompat
 import com.albez0dialer.telecom.CallManager
 import com.albez0dialer.telecom.MyConnectionService
 import com.albez0dialer.telecom.MyInCallService
@@ -171,7 +176,7 @@ class DialerModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
 
     /**
      * Place an outgoing call using Android Telecom Framework
-     * This will route through MyConnectionService
+     * Falls back to Intent.ACTION_CALL if not default dialer
      * 
      * JavaScript:
      * await DialerModule.startOutgoingCall('+1234567890');
@@ -181,31 +186,167 @@ class DialerModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
         try {
             Log.d(TAG, "Starting outgoing call to: $phoneNumber")
 
-            // Create phone account handle
-            val componentName = ComponentName(reactApplicationContext, MyConnectionService::class.java)
-            val phoneAccountHandle = PhoneAccountHandle(componentName, PHONE_ACCOUNT_ID)
+            // Check if we are the default dialer
+            val packageName = reactApplicationContext.packageName
+            val defaultDialer = telecomManager?.defaultDialerPackage
+            val isDefaultDialer = defaultDialer == packageName
 
-            // Create call URI
-            val callUri = Uri.fromParts("tel", phoneNumber, null)
-
-            // Build extras
-            val extras = android.os.Bundle().apply {
-                putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccountHandle)
-                putBoolean(TelecomManager.EXTRA_START_CALL_WITH_SPEAKERPHONE, false)
+            if (isDefaultDialer) {
+                // Use TelecomManager when we are the default dialer
+                val componentName = ComponentName(reactApplicationContext, MyConnectionService::class.java)
+                val phoneAccountHandle = PhoneAccountHandle(componentName, PHONE_ACCOUNT_ID)
+                val callUri = Uri.fromParts("tel", phoneNumber, null)
+                val extras = android.os.Bundle().apply {
+                    putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccountHandle)
+                    putBoolean(TelecomManager.EXTRA_START_CALL_WITH_SPEAKERPHONE, false)
+                }
+                telecomManager?.placeCall(callUri, extras)
+                Log.d(TAG, "Call placed via TelecomManager")
+            } else {
+                // Use Intent.ACTION_CALL as fallback
+                val callUri = Uri.parse("tel:$phoneNumber")
+                val intent = Intent(Intent.ACTION_CALL, callUri)
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                reactApplicationContext.startActivity(intent)
+                Log.d(TAG, "Call placed via Intent.ACTION_CALL")
             }
 
-            // Place call through TelecomManager
-            telecomManager?.placeCall(callUri, extras)
-
-            Log.d(TAG, "Call placed successfully")
             promise.resolve("Call started")
         } catch (e: SecurityException) {
             Log.e(TAG, "Permission denied for placing call", e)
-            promise.reject("PERMISSION_ERROR", "Missing CALL_PHONE or MANAGE_OWN_CALLS permission")
+            promise.reject("PERMISSION_ERROR", "Missing CALL_PHONE permission")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to place call", e)
             promise.reject("CALL_ERROR", e.message)
         }
+    }
+
+    /**
+     * Get available SIM cards
+     * 
+     * JavaScript:
+     * const sims = await DialerModule.getSimCards();
+     * // Returns: [{ slotIndex: 0, subscriptionId: 1, carrierName: "Carrier", displayName: "SIM 1", number: "" }]
+     */
+    @ReactMethod
+    fun getSimCards(promise: Promise) {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP_MR1) {
+                promise.resolve(Arguments.createArray())
+                return
+            }
+
+            val hasPermission = ContextCompat.checkSelfPermission(
+                reactApplicationContext,
+                Manifest.permission.READ_PHONE_STATE
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if (!hasPermission) {
+                Log.w(TAG, "READ_PHONE_STATE permission not granted")
+                promise.resolve(Arguments.createArray())
+                return
+            }
+
+            val subscriptionManager = reactApplicationContext.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as? SubscriptionManager
+            val activeSubscriptions: List<SubscriptionInfo>? = subscriptionManager?.activeSubscriptionInfoList
+
+            val simArray = Arguments.createArray()
+            activeSubscriptions?.forEach { info ->
+                val simMap = Arguments.createMap().apply {
+                    putInt("slotIndex", info.simSlotIndex)
+                    putInt("subscriptionId", info.subscriptionId)
+                    putString("carrierName", info.carrierName?.toString() ?: "Unknown")
+                    putString("displayName", info.displayName?.toString() ?: "SIM ${info.simSlotIndex + 1}")
+                    putString("number", info.number ?: "")
+                    putString("iccId", info.iccId ?: "")
+                }
+                simArray.pushMap(simMap)
+            }
+
+            Log.d(TAG, "Found ${simArray.size()} SIM cards")
+            promise.resolve(simArray)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Permission denied for getting SIM cards", e)
+            promise.resolve(Arguments.createArray())
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get SIM cards", e)
+            promise.reject("SIM_ERROR", e.message)
+        }
+    }
+
+    /**
+     * Place an outgoing call with a specific SIM
+     * 
+     * JavaScript:
+     * await DialerModule.startOutgoingCallWithSim('+1234567890', 1); // subscriptionId
+     */
+    @ReactMethod
+    fun startOutgoingCallWithSim(phoneNumber: String, subscriptionId: Int, promise: Promise) {
+        try {
+            Log.d(TAG, "Starting outgoing call to: $phoneNumber with SIM subscriptionId: $subscriptionId")
+
+            val callUri = Uri.parse("tel:$phoneNumber")
+            val intent = Intent(Intent.ACTION_CALL, callUri)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            
+            // Add SIM selection extra
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+                intent.putExtra("android.telecom.extra.PHONE_ACCOUNT_HANDLE", getPhoneAccountHandleForSub(subscriptionId))
+                // Alternative extras for different Android versions/manufacturers
+                intent.putExtra("com.android.phone.extra.PHONE_ACCOUNT_HANDLE", getPhoneAccountHandleForSub(subscriptionId))
+                intent.putExtra("subscription", subscriptionId)
+                intent.putExtra("simSlot", getSimSlotForSubscription(subscriptionId))
+            }
+
+            reactApplicationContext.startActivity(intent)
+            Log.d(TAG, "Call placed with specific SIM via Intent")
+            promise.resolve("Call started with SIM $subscriptionId")
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Permission denied for placing call with SIM", e)
+            promise.reject("PERMISSION_ERROR", "Missing CALL_PHONE permission")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to place call with SIM", e)
+            promise.reject("CALL_ERROR", e.message)
+        }
+    }
+
+    /**
+     * Get PhoneAccountHandle for a subscription ID
+     */
+    private fun getPhoneAccountHandleForSub(subscriptionId: Int): PhoneAccountHandle? {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                telecomManager?.callCapablePhoneAccounts?.forEach { handle ->
+                    val account = telecomManager?.getPhoneAccount(handle)
+                    val extras = account?.extras
+                    if (extras != null) {
+                        val subId = extras.getInt("android.telecom.extra.SUBSCRIPTION_ID", -1)
+                        if (subId == subscriptionId) {
+                            return handle
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting PhoneAccountHandle for subscription", e)
+        }
+        return null
+    }
+
+    /**
+     * Get SIM slot index for a subscription ID
+     */
+    private fun getSimSlotForSubscription(subscriptionId: Int): Int {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+                val subscriptionManager = reactApplicationContext.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as? SubscriptionManager
+                val info = subscriptionManager?.activeSubscriptionInfoList?.find { it.subscriptionId == subscriptionId }
+                return info?.simSlotIndex ?: 0
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting SIM slot", e)
+        }
+        return 0
     }
 
     /**
