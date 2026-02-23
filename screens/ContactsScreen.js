@@ -18,6 +18,7 @@ import {
 import Contacts from 'react-native-contacts';
 import { requestContactsPermission } from '../utils/permissions';
 import { addFavourite, removeFavourite } from '../utils/storage';
+import SimSelector from '../components/SimSelector';
 
 const { DialerModule } = NativeModules;
 
@@ -28,6 +29,8 @@ const ContactsScreen = ({ onCall }) => {
   const [loading, setLoading] = useState(true);
   const [permissionGranted, setPermissionGranted] = useState(false);
   const [favouriteIds, setFavouriteIds] = useState(new Set());
+  const [showSimSelector, setShowSimSelector] = useState(false);
+  const [pendingCall, setPendingCall] = useState({ contact: null, phoneNumber: '' });
 
   useEffect(() => {
     loadContacts();
@@ -102,6 +105,41 @@ const ContactsScreen = ({ onCall }) => {
             callState: 'outgoing',
             profilePicture:
               contact.hasThumbnail && contact.thumbnailPath ? contact.thumbnailPath : null,
+          });
+        }
+      }
+    } catch (error) {
+      Alert.alert('Call Failed', error.message);
+    }
+  };
+
+  const handleLongPressCall = (contact, phoneNumber) => {
+    if (!phoneNumber) return;
+    Vibration.vibrate(50);
+    setPendingCall({ contact, phoneNumber });
+    setShowSimSelector(true);
+  };
+
+  const handleCallWithSim = async (sim) => {
+    const { contact, phoneNumber } = pendingCall;
+    if (!phoneNumber) return;
+    try {
+      if (Platform.OS === 'android') {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.CALL_PHONE,
+        );
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) return;
+      }
+      Vibration.vibrate(100);
+      if (DialerModule && DialerModule.startOutgoingCallWithSim) {
+        await DialerModule.startOutgoingCallWithSim(phoneNumber, sim.subscriptionId);
+        if (onCall) {
+          onCall({
+            contactName: contact?.displayName || 'Unknown',
+            phoneNumber,
+            callState: 'outgoing',
+            profilePicture:
+              contact?.hasThumbnail && contact?.thumbnailPath ? contact.thumbnailPath : null,
           });
         }
       }
@@ -255,6 +293,8 @@ const ContactsScreen = ({ onCall }) => {
               marginLeft: 4,
             }}
             onPress={() => handleCallContact(item, phoneNumber)}
+            onLongPress={() => handleLongPressCall(item, phoneNumber)}
+            delayLongPress={400}
             activeOpacity={0.5}
           >
             <Text style={{ fontSize: 15 }}>📞</Text>
@@ -367,6 +407,15 @@ const ContactsScreen = ({ onCall }) => {
           ListEmptyComponent={renderEmptyList}
           contentContainerStyle={{ paddingBottom: 20 }}
           showsVerticalScrollIndicator={false}
+        />
+
+        {/* SIM Selector Modal */}
+        <SimSelector
+          visible={showSimSelector}
+          onClose={() => setShowSimSelector(false)}
+          onSelectSim={handleCallWithSim}
+          phoneNumber={pendingCall.phoneNumber}
+          contactName={pendingCall.contact?.displayName}
         />
       </SafeAreaView>
     </>
